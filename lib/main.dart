@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 void main() {
   runApp(const MyApp());
@@ -10,98 +12,112 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Лабораторная 4',
-      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue)),
-      home: const CardListPage(),
+      title: 'Лабораторная 5',
+      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.yellow)),
+      home: const PokemonSearchPage(),
     );
   }
 }
 
-// Модель карточки города
-class CityCard {
+// ==========================================
+// 1. DTO (Data Transfer Object)
+// ==========================================
+class PokemonDto {
   final String name;
-  final String description;
-  final String fullDescription;
   final String imageUrl;
-  final Color color;
+  final int height;
+  final int weight;
+  final List<String> types;
 
-  const CityCard({
+  PokemonDto({
     required this.name,
-    required this.description,
-    required this.fullDescription,
     required this.imageUrl,
-    required this.color,
+    required this.height,
+    required this.weight,
+    required this.types,
   });
+
+  factory PokemonDto.fromJson(Map<String, dynamic> json) {
+    return PokemonDto(
+      name: json['name'].toString().toUpperCase(),
+      imageUrl: json['sprites']['front_default'] ?? '',
+      height: json['height'] ?? 0,
+      weight: json['weight'] ?? 0,
+      types: (json['types'] as List)
+          .map((e) => e['type']['name'].toString().toUpperCase())
+          .toList(),
+    );
+  }
 }
 
-class CardListPage extends StatefulWidget {
-  const CardListPage({super.key});
+// ==========================================
+// 2. Интерфейс репозитория
+// ==========================================
+abstract class PokemonRepository {
+  Future<PokemonDto?> searchPokemon(String name);
+}
+
+// ==========================================
+// 3. Реализация репозитория
+// ==========================================
+class PokemonRepositoryImpl implements PokemonRepository {
+  @override
+  Future<PokemonDto?> searchPokemon(String name) async {
+    try {
+      final url = Uri.parse('https://pokeapi.co/api/v2/pokemon/${name.toLowerCase().trim()}');
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        final jsonData = jsonDecode(response.body);
+        return PokemonDto.fromJson(jsonData);
+      } else {
+        return null; // Покемон не найден
+      }
+    } catch (e) {
+      debugPrint('Ошибка сети: $e');
+      return null;
+    }
+  }
+}
+
+// ==========================================
+// 4. UI (Экран поиска)
+// ==========================================
+class PokemonSearchPage extends StatefulWidget {
+  const PokemonSearchPage({super.key});
 
   @override
-  State<CardListPage> createState() => _CardListPageState();
+  State<PokemonSearchPage> createState() => _PokemonSearchPageState();
 }
 
-class _CardListPageState extends State<CardListPage> {
-  // Список городов с реальными картинками
-  final List<CityCard> cities = [
-    CityCard(
-      name: 'Москва',
-      description: 'Столица России, крупнейший город страны.',
-      fullDescription: 'Москва — столица Российской Федерации, город федерального значения. Население более 12 млн человек. Здесь находятся Кремль, Красная площадь, Большой театр и множество других достопримечательностей.',
-      imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Moscow_City_view_from_Ostankino_TV_Tower.jpg/640px-Moscow_City_view_from_Ostankino_TV_Tower.jpg',
-      color: Colors.red,
-    ),
-    CityCard(
-      name: 'Санкт-Петербург',
-      description: 'Культурная столица России, город на Неве.',
-      fullDescription: 'Санкт-Петербург — второй по величине город России, основанный Петром I в 1703 году. Город известен Эрмитажем, разводными мостами и белыми ночами.',
-      imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Saint_Petersburg_Winter_Palace.jpg/640px-Saint_Petersburg_Winter_Palace.jpg',
-      color: Colors.blue,
-    ),
-    CityCard(
-      name: 'Казань',
-      description: 'Столица Татарстана, город тысячелетней истории.',
-      fullDescription: 'Казань — столица Республики Татарстан. Город славится Казанским Кремлём, мечетью Кул-Шариф и уникальным сочетанием русской и татарской культур.',
-      imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Kazan_Kremlin.jpg/640px-Kazan_Kremlin.jpg',
-      color: Colors.green,
-    ),
-  ];
+class _PokemonSearchPageState extends State<PokemonSearchPage> {
+  final PokemonRepository _repository = PokemonRepositoryImpl();
+  final TextEditingController _searchController = TextEditingController();
 
-  // Храним лайки
-  final Set<int> likedCities = {};
+  PokemonDto? _pokemon;
+  bool _isLoading = false;
+  String? _errorMessage;
 
-  // Переключение лайка
-  void toggleLike(int index) {
+  Future<void> _searchPokemon() async {
+    final query = _searchController.text.trim();
+    if (query.isEmpty) return;
+
     setState(() {
-      if (likedCities.contains(index)) {
-        likedCities.remove(index);
-      } else {
-        likedCities.add(index);
-      }
+      _isLoading = true;
+      _errorMessage = null;
+      _pokemon = null;
     });
 
-    final city = cities[index];
-    final isLiked = likedCities.contains(index);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(isLiked
-            ? '❤️ Вы лайкнули: ${city.name}'
-            : '💔 Лайк убран: ${city.name}'),
-        duration: const Duration(seconds: 2),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
+    final result = await _repository.searchPokemon(query);
 
-  // Переход на детальный экран
-  void openDetail(int index) {
-    final city = cities[index];
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => CityDetailPage(city: city),
-      ),
-    );
+    setState(() {
+      _isLoading = false;
+      if (result != null) {
+        _pokemon = result;
+      } else {
+        _errorMessage = 'Покемон "$query" не найден. Попробуй "pikachu" или "charizard".';
+      }
+    });
   }
 
   @override
@@ -111,172 +127,85 @@ class _CardListPageState extends State<CardListPage> {
         title: const Text('Сайгушев Данил Андреевич, Группа Пдо-37'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
-      body: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: cities.length,
-        itemBuilder: (context, index) {
-          final city = cities[index];
-          final isLiked = likedCities.contains(index);
-
-          return Card(
-            elevation: 4,
-            margin: const EdgeInsets.only(bottom: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            Row(
               children: [
-                // Картинка с кнопкой лайка
-                ClipRRect(
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(4),
-                  ),
-                  child: Stack(
-                    fit: StackFit.loose,
-                    children: [
-                      Image.network(
-                        city.imageUrl,
-                        height: 200,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            height: 200,
-                            width: double.infinity,
-                            color: city.color.withOpacity(0.2),
-                            child: const Icon(Icons.broken_image, size: 50),
-                          );
-                        },
-                        loadingBuilder: (context, child, loadingProgress) {
-                          if (loadingProgress == null) return child;
-                          return Container(
-                            height: 200,
-                            width: double.infinity,
-                            color: city.color.withOpacity(0.2),
-                            child: const Center(child: CircularProgressIndicator()),
-                          );
-                        },
-                      ),
-                      // Кнопка лайка
-                      Positioned(
-                        top: 8,
-                        right: 8,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.7),
-                            shape: BoxShape.circle,
-                          ),
-                          child: IconButton(
-                            icon: Icon(
-                              isLiked ? Icons.favorite : Icons.favorite_border,
-                              color: isLiked ? Colors.red : Colors.black54,
-                              size: 32,
-                            ),
-                            onPressed: () => toggleLike(index),
-                          ),
-                        ),
-                      ),
-                    ],
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: const InputDecoration(
+                      hintText: 'Введите имя (напр. pikachu)',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                    onSubmitted: (_) => _searchPokemon(),
                   ),
                 ),
-                // Текст + кнопка
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        city.name,
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: city.color,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        city.description,
-                        style: const TextStyle(fontSize: 16, color: Colors.black87),
-                      ),
-                      const SizedBox(height: 12),
-                      ElevatedButton.icon(
-                        onPressed: () => openDetail(index),
-                        icon: const Icon(Icons.info_outline),
-                        label: const Text('Подробнее'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: city.color,
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: _isLoading ? null : _searchPokemon,
+                  child: _isLoading
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text('Найти'),
                 ),
               ],
             ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-// Детальный экран города
-class CityDetailPage extends StatelessWidget {
-  final CityCard city;
-
-  const CityDetailPage({super.key, required this.city});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(city.name),
-        backgroundColor: city.color,
-        foregroundColor: Colors.white,
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Большая картинка
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.network(
-                city.imageUrl,
-                width: double.infinity,
-                height: 250,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    height: 250,
-                    width: double.infinity,
-                    color: city.color.withOpacity(0.2),
-                    child: const Icon(Icons.broken_image, size: 80),
-                  );
-                },
-              ),
-            ),
             const SizedBox(height: 24),
-            Text(
-              city.name,
-              style: TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-                color: city.color,
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Описание:',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              city.fullDescription,
-              style: const TextStyle(fontSize: 16, height: 1.5),
-            ),
+            if (_isLoading)
+              const Expanded(child: Center(child: CircularProgressIndicator()))
+            else if (_errorMessage != null)
+              Center(
+                child: Text(_errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 16), textAlign: TextAlign.center),
+              )
+            else if (_pokemon != null)
+                Expanded(
+                  child: Card(
+                    elevation: 4,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _pokemon!.imageUrl.isNotEmpty
+                              ? Image.network(_pokemon!.imageUrl, height: 150, errorBuilder: (_, __, ___) => const Icon(Icons.pets, size: 100, color: Colors.grey))
+                              : const Icon(Icons.pets, size: 100, color: Colors.grey),
+                          const SizedBox(height: 16),
+                          Text(_pokemon!.name, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 16),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              _buildStatColumn('Рост', '${_pokemon!.height} дм'),
+                              _buildStatColumn('Вес', '${_pokemon!.weight} г'),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          Wrap(
+                            spacing: 8,
+                            alignment: WrapAlignment.center,
+                            children: _pokemon!.types.map((type) => Chip(label: Text(type), backgroundColor: Colors.yellow.shade100)).toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildStatColumn(String label, String value) {
+    return Column(
+      children: [
+        Text(label, style: const TextStyle(fontSize: 14, color: Colors.grey)),
+        const SizedBox(height: 4),
+        Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+      ],
     );
   }
 }
