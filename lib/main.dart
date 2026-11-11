@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async'; // Для Timer (Debounce)
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:equatable/equatable.dart';
 
 void main() {
   runApp(const MyApp());
@@ -12,9 +15,12 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Лабораторная 5',
+      title: 'Лабораторная 6',
       theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.yellow)),
-      home: const PokemonSearchPage(),
+      home: BlocProvider(
+        create: (context) => PokemonBloc(PokemonRepositoryImpl()),
+        child: const PokemonSearchPage(),
+      ),
     );
   }
 }
@@ -71,7 +77,7 @@ class PokemonRepositoryImpl implements PokemonRepository {
         final jsonData = jsonDecode(response.body);
         return PokemonDto.fromJson(jsonData);
       } else {
-        return null; // Покемон не найден
+        return null;
       }
     } catch (e) {
       debugPrint('Ошибка сети: $e');
@@ -81,7 +87,85 @@ class PokemonRepositoryImpl implements PokemonRepository {
 }
 
 // ==========================================
-// 4. UI (Экран поиска)
+// 4. BLoC: События (Events)
+// ==========================================
+abstract class PokemonEvent extends Equatable {
+  const PokemonEvent();
+  @override
+  List<Object> get props => [];
+}
+
+class SearchPokemonEvent extends PokemonEvent {
+  final String query;
+  const SearchPokemonEvent(this.query);
+  @override
+  List<Object> get props => [query];
+}
+
+class RefreshPokemonEvent extends PokemonEvent {}
+
+// ==========================================
+// 5. BLoC: Состояния (States)
+// ==========================================
+abstract class PokemonState extends Equatable {
+  const PokemonState();
+  @override
+  List<Object> get props => [];
+}
+
+class PokemonInitial extends PokemonState {}
+
+class PokemonLoading extends PokemonState {}
+
+class PokemonLoaded extends PokemonState {
+  final PokemonDto pokemon;
+  const PokemonLoaded(this.pokemon);
+  @override
+  List<Object> get props => [pokemon];
+}
+
+class PokemonError extends PokemonState {
+  final String message;
+  const PokemonError(this.message);
+  @override
+  List<Object> get props => [message];
+}
+
+// ==========================================
+// 6. BLoC: Логика
+// ==========================================
+class PokemonBloc extends Bloc<PokemonEvent, PokemonState> {
+  final PokemonRepository repository;
+  String _lastQuery = '';
+
+  PokemonBloc(this.repository) : super(PokemonInitial()) {
+    on<SearchPokemonEvent>(_onSearch);
+    on<RefreshPokemonEvent>(_onRefresh);
+  }
+
+  Future<void> _onSearch(SearchPokemonEvent event, Emitter<PokemonState> emit) async {
+    if (event.query.trim().isEmpty) return;
+    _lastQuery = event.query.trim();
+
+    emit(PokemonLoading());
+    final result = await repository.searchPokemon(_lastQuery);
+
+    if (result != null) {
+      emit(PokemonLoaded(result));
+    } else {
+      emit(PokemonError('Покемон "$_lastQuery" не найден. Попробуй "pikachu" или "charizard".'));
+    }
+  }
+
+  Future<void> _onRefresh(RefreshPokemonEvent event, Emitter<PokemonState> emit) async {
+    if (_lastQuery.isNotEmpty) {
+      add(SearchPokemonEvent(_lastQuery));
+    }
+  }
+}
+
+// ==========================================
+// 7. UI (Экран с BLoC, Debounce и Refresh)
 // ==========================================
 class PokemonSearchPage extends StatefulWidget {
   const PokemonSearchPage({super.key});
@@ -91,33 +175,20 @@ class PokemonSearchPage extends StatefulWidget {
 }
 
 class _PokemonSearchPageState extends State<PokemonSearchPage> {
-  final PokemonRepository _repository = PokemonRepositoryImpl();
   final TextEditingController _searchController = TextEditingController();
+  Timer? _debounceTimer;
 
-  PokemonDto? _pokemon;
-  bool _isLoading = false;
-  String? _errorMessage;
+  @override
+  void dispose() {
+    _debounceTimer?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
 
-  Future<void> _searchPokemon() async {
-    final query = _searchController.text.trim();
-    if (query.isEmpty) return;
-
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-      _pokemon = null;
-    });
-
-    final result = await _repository.searchPokemon(query);
-
-    setState(() {
-      _isLoading = false;
-      if (result != null) {
-        _pokemon = result;
-      } else {
-        _errorMessage = 'Покемон "$query" не найден. Попробуй "pikachu" или "charizard".';
-      }
-    });
+  // Метод для обновления страницы (Pull-to-refresh)
+  Future<void> _onRefresh() async {
+    debugPrint('Pull-to-refresh triggered!');
+    context.read<PokemonBloc>().add(RefreshPokemonEvent());
   }
 
   @override
@@ -127,76 +198,116 @@ class _PokemonSearchPageState extends State<PokemonSearchPage> {
         title: const Text('Сайгушев Данил Андреевич, Группа Пдо-37'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            Row(
+      body: RefreshIndicator(
+        onRefresh: _onRefresh,
+        child: BlocBuilder<PokemonBloc, PokemonState>(
+          builder: (context, state) {
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(), // ← Позволяет свайпать всегда
+              padding: const EdgeInsets.all(16.0),
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    decoration: const InputDecoration(
-                      hintText: 'Введите имя (напр. pikachu)',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.search),
-                    ),
-                    onSubmitted: (_) => _searchPokemon(),
+                TextField(
+                  controller: _searchController,
+                  decoration: const InputDecoration(
+                    hintText: 'Введите имя (напр. pikachu)',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.search),
+                    suffixIcon: Icon(Icons.clear),
                   ),
+                  // DEBOUNCE: задержка 500 мс перед отправкой запроса
+                  onChanged: (value) {
+                    if (_debounceTimer?.isActive ?? false) {
+                      _debounceTimer!.cancel();
+                    }
+                    _debounceTimer = Timer(const Duration(milliseconds: 500), () {
+                      context.read<PokemonBloc>().add(SearchPokemonEvent(value));
+                    });
+                  },
+                  onSubmitted: (value) {
+                    _debounceTimer?.cancel();
+                    context.read<PokemonBloc>().add(SearchPokemonEvent(value));
+                  },
                 ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: _isLoading ? null : _searchPokemon,
-                  child: _isLoading
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('Найти'),
-                ),
+                const SizedBox(height: 24),
+                _buildBody(state),
               ],
-            ),
-            const SizedBox(height: 24),
-            if (_isLoading)
-              const Expanded(child: Center(child: CircularProgressIndicator()))
-            else if (_errorMessage != null)
-              Center(
-                child: Text(_errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 16), textAlign: TextAlign.center),
-              )
-            else if (_pokemon != null)
-                Expanded(
-                  child: Card(
-                    elevation: 4,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _pokemon!.imageUrl.isNotEmpty
-                              ? Image.network(_pokemon!.imageUrl, height: 150, errorBuilder: (_, __, ___) => const Icon(Icons.pets, size: 100, color: Colors.grey))
-                              : const Icon(Icons.pets, size: 100, color: Colors.grey),
-                          const SizedBox(height: 16),
-                          Text(_pokemon!.name, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 16),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              _buildStatColumn('Рост', '${_pokemon!.height} дм'),
-                              _buildStatColumn('Вес', '${_pokemon!.weight} г'),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                          Wrap(
-                            spacing: 8,
-                            alignment: WrapAlignment.center,
-                            children: _pokemon!.types.map((type) => Chip(label: Text(type), backgroundColor: Colors.yellow.shade100)).toList(),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-          ],
+            );
+          },
         ),
       ),
     );
+  }
+
+  Widget _buildBody(PokemonState state) {
+    if (state is PokemonInitial) {
+      return const Padding(
+        padding: EdgeInsets.all(32.0),
+        child: Text(
+          'Введите имя покемона для поиска',
+          style: TextStyle(color: Colors.grey, fontSize: 16),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+    if (state is PokemonLoading) {
+      return const Padding(
+        padding: EdgeInsets.all(32.0),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (state is PokemonError) {
+      return Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Text(
+          state.message,
+          style: const TextStyle(color: Colors.red, fontSize: 16),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+    if (state is PokemonLoaded) {
+      final pokemon = state.pokemon;
+      return Card(
+        elevation: 4,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              pokemon.imageUrl.isNotEmpty
+                  ? Image.network(
+                pokemon.imageUrl,
+                height: 150,
+                errorBuilder: (_, __, ___) => const Icon(Icons.pets, size: 100, color: Colors.grey),
+              )
+                  : const Icon(Icons.pets, size: 100, color: Colors.grey),
+              const SizedBox(height: 16),
+              Text(
+                pokemon.name,
+                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildStatColumn('Рост', '${pokemon.height} дм'),
+                  _buildStatColumn('Вес', '${pokemon.weight} г'),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                alignment: WrapAlignment.center,
+                children: pokemon.types
+                    .map((type) => Chip(label: Text(type), backgroundColor: Colors.yellow.shade100))
+                    .toList(),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
   }
 
   Widget _buildStatColumn(String label, String value) {
