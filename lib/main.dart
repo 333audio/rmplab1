@@ -1,322 +1,199 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
-import 'dart:async'; // Для Timer (Debounce)
-import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:equatable/equatable.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 void main() {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+// ==========================================
+// ЛОКАЛИЗАЦИЯ
+// ==========================================
+class AppLocalizations {
+  final Locale locale;
+  AppLocalizations(this.locale);
+
+  static AppLocalizations of(BuildContext context) {
+    return Localizations.of<AppLocalizations>(context, AppLocalizations)!;
+  }
+
+  static const LocalizationsDelegate<AppLocalizations> delegate =
+  _AppLocalizationsDelegate();
+
+  static const Map<String, Map<String, String>> _localizedValues = {
+    'en': {
+      'title': 'My Favorites',
+      'add_item': 'Add',
+      'hint': 'Enter item name...',
+      'saved': 'Saved items:',
+      'empty': 'No items yet',
+      'delete': 'Delete',
+    },
+    'ru': {
+      'title': 'Моё Избранное',
+      'add_item': 'Добавить',
+      'hint': 'Введите название...',
+      'saved': 'Сохраненные элементы:',
+      'empty': 'Список пуст',
+      'delete': 'Удалить',
+    },
+  };
+
+  String translate(String key) {
+    return _localizedValues[locale.languageCode]?[key] ?? key;
+  }
+}
+
+class _AppLocalizationsDelegate
+    extends LocalizationsDelegate<AppLocalizations> {
+  const _AppLocalizationsDelegate();
+  @override
+  bool isSupported(Locale locale) => ['en', 'ru'].contains(locale.languageCode);
+  @override
+  Future<AppLocalizations> load(Locale locale) async {
+    return AppLocalizations(locale);
+  }
+  @override
+  bool shouldReload(_AppLocalizationsDelegate old) => false;
+}
+
+// ==========================================
+// ПРИЛОЖЕНИЕ
+// ==========================================
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  Locale _locale = const Locale('ru');
+
+  void setLocale(Locale locale) {
+    setState(() {
+      _locale = locale;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Лабораторная 6',
-      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.yellow)),
-      home: BlocProvider(
-        create: (context) => PokemonBloc(PokemonRepositoryImpl()),
-        child: const PokemonSearchPage(),
-      ),
+      title: 'Lab 7',
+      locale: _locale,
+      supportedLocales: const [Locale('en'), Locale('ru')],
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple)),
+      home: FavoritesPage(onLocaleChange: setLocale),
     );
   }
 }
 
-// ==========================================
-// 1. DTO (Data Transfer Object)
-// ==========================================
-class PokemonDto {
-  final String name;
-  final String imageUrl;
-  final int height;
-  final int weight;
-  final List<String> types;
+class FavoritesPage extends StatefulWidget {
+  final Function(Locale) onLocaleChange;
+  const FavoritesPage({super.key, required this.onLocaleChange});
 
-  PokemonDto({
-    required this.name,
-    required this.imageUrl,
-    required this.height,
-    required this.weight,
-    required this.types,
-  });
-
-  factory PokemonDto.fromJson(Map<String, dynamic> json) {
-    return PokemonDto(
-      name: json['name'].toString().toUpperCase(),
-      imageUrl: json['sprites']['front_default'] ?? '',
-      height: json['height'] ?? 0,
-      weight: json['weight'] ?? 0,
-      types: (json['types'] as List)
-          .map((e) => e['type']['name'].toString().toUpperCase())
-          .toList(),
-    );
-  }
-}
-
-// ==========================================
-// 2. Интерфейс репозитория
-// ==========================================
-abstract class PokemonRepository {
-  Future<PokemonDto?> searchPokemon(String name);
-}
-
-// ==========================================
-// 3. Реализация репозитория
-// ==========================================
-class PokemonRepositoryImpl implements PokemonRepository {
   @override
-  Future<PokemonDto?> searchPokemon(String name) async {
-    try {
-      final url = Uri.parse('https://pokeapi.co/api/v2/pokemon/${name.toLowerCase().trim()}');
-      final response = await http.get(url);
-
-      if (response.statusCode == 200) {
-        final jsonData = jsonDecode(response.body);
-        return PokemonDto.fromJson(jsonData);
-      } else {
-        return null;
-      }
-    } catch (e) {
-      debugPrint('Ошибка сети: $e');
-      return null;
-    }
-  }
+  State<FavoritesPage> createState() => _FavoritesPageState();
 }
 
-// ==========================================
-// 4. BLoC: События (Events)
-// ==========================================
-abstract class PokemonEvent extends Equatable {
-  const PokemonEvent();
-  @override
-  List<Object> get props => [];
-}
+class _FavoritesPageState extends State<FavoritesPage> {
+  List<String> _items = [];
+  final TextEditingController _controller = TextEditingController();
 
-class SearchPokemonEvent extends PokemonEvent {
-  final String query;
-  const SearchPokemonEvent(this.query);
-  @override
-  List<Object> get props => [query];
-}
-
-class RefreshPokemonEvent extends PokemonEvent {}
-
-// ==========================================
-// 5. BLoC: Состояния (States)
-// ==========================================
-abstract class PokemonState extends Equatable {
-  const PokemonState();
-  @override
-  List<Object> get props => [];
-}
-
-class PokemonInitial extends PokemonState {}
-
-class PokemonLoading extends PokemonState {}
-
-class PokemonLoaded extends PokemonState {
-  final PokemonDto pokemon;
-  const PokemonLoaded(this.pokemon);
-  @override
-  List<Object> get props => [pokemon];
-}
-
-class PokemonError extends PokemonState {
-  final String message;
-  const PokemonError(this.message);
-  @override
-  List<Object> get props => [message];
-}
-
-// ==========================================
-// 6. BLoC: Логика
-// ==========================================
-class PokemonBloc extends Bloc<PokemonEvent, PokemonState> {
-  final PokemonRepository repository;
-  String _lastQuery = '';
-
-  PokemonBloc(this.repository) : super(PokemonInitial()) {
-    on<SearchPokemonEvent>(_onSearch);
-    on<RefreshPokemonEvent>(_onRefresh);
-  }
-
-  Future<void> _onSearch(SearchPokemonEvent event, Emitter<PokemonState> emit) async {
-    if (event.query.trim().isEmpty) return;
-    _lastQuery = event.query.trim();
-
-    emit(PokemonLoading());
-    final result = await repository.searchPokemon(_lastQuery);
-
-    if (result != null) {
-      emit(PokemonLoaded(result));
-    } else {
-      emit(PokemonError('Покемон "$_lastQuery" не найден. Попробуй "pikachu" или "charizard".'));
+  void _addItem() {
+    if (_controller.text.isNotEmpty) {
+      setState(() {
+        _items.add(_controller.text);
+        _controller.clear();
+      });
     }
   }
 
-  Future<void> _onRefresh(RefreshPokemonEvent event, Emitter<PokemonState> emit) async {
-    if (_lastQuery.isNotEmpty) {
-      add(SearchPokemonEvent(_lastQuery));
-    }
-  }
-}
-
-// ==========================================
-// 7. UI (Экран с BLoC, Debounce и Refresh)
-// ==========================================
-class PokemonSearchPage extends StatefulWidget {
-  const PokemonSearchPage({super.key});
-
-  @override
-  State<PokemonSearchPage> createState() => _PokemonSearchPageState();
-}
-
-class _PokemonSearchPageState extends State<PokemonSearchPage> {
-  final TextEditingController _searchController = TextEditingController();
-  Timer? _debounceTimer;
-
-  @override
-  void dispose() {
-    _debounceTimer?.cancel();
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  // Метод для обновления страницы (Pull-to-refresh)
-  Future<void> _onRefresh() async {
-    debugPrint('Pull-to-refresh triggered!');
-    context.read<PokemonBloc>().add(RefreshPokemonEvent());
+  void _deleteItem(int index) {
+    setState(() {
+      _items.removeAt(index);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final loc = AppLocalizations.of(context);
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Сайгушев Данил Андреевич, Группа Пдо-37'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: Text(loc.translate('title')),
+        actions: [
+          PopupMenuButton<Locale>(
+            icon: const Icon(Icons.language),
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: Locale('ru'), child: Text('Русский')),
+              const PopupMenuItem(value: Locale('en'), child: Text('English')),
+            ],
+            onSelected: (locale) {
+              widget.onLocaleChange(locale);
+            },
+          ),
+        ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _onRefresh,
-        child: BlocBuilder<PokemonBloc, PokemonState>(
-          builder: (context, state) {
-            return ListView(
-              physics: const AlwaysScrollableScrollPhysics(), // ← Позволяет свайпать всегда
-              padding: const EdgeInsets.all(16.0),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            Row(
               children: [
-                TextField(
-                  controller: _searchController,
-                  decoration: const InputDecoration(
-                    hintText: 'Введите имя (напр. pikachu)',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.search),
-                    suffixIcon: Icon(Icons.clear),
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    decoration: InputDecoration(
+                      hintText: loc.translate('hint'),
+                      border: const OutlineInputBorder(),
+                    ),
                   ),
-                  // DEBOUNCE: задержка 500 мс перед отправкой запроса
-                  onChanged: (value) {
-                    if (_debounceTimer?.isActive ?? false) {
-                      _debounceTimer!.cancel();
-                    }
-                    _debounceTimer = Timer(const Duration(milliseconds: 500), () {
-                      context.read<PokemonBloc>().add(SearchPokemonEvent(value));
-                    });
-                  },
-                  onSubmitted: (value) {
-                    _debounceTimer?.cancel();
-                    context.read<PokemonBloc>().add(SearchPokemonEvent(value));
-                  },
                 ),
-                const SizedBox(height: 24),
-                _buildBody(state),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: _addItem,
+                  child: Text(loc.translate('add_item')),
+                ),
               ],
-            );
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBody(PokemonState state) {
-    if (state is PokemonInitial) {
-      return const Padding(
-        padding: EdgeInsets.all(32.0),
-        child: Text(
-          'Введите имя покемона для поиска',
-          style: TextStyle(color: Colors.grey, fontSize: 16),
-          textAlign: TextAlign.center,
-        ),
-      );
-    }
-    if (state is PokemonLoading) {
-      return const Padding(
-        padding: EdgeInsets.all(32.0),
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
-    if (state is PokemonError) {
-      return Padding(
-        padding: const EdgeInsets.all(32.0),
-        child: Text(
-          state.message,
-          style: const TextStyle(color: Colors.red, fontSize: 16),
-          textAlign: TextAlign.center,
-        ),
-      );
-    }
-    if (state is PokemonLoaded) {
-      final pokemon = state.pokemon;
-      return Card(
-        elevation: 4,
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              pokemon.imageUrl.isNotEmpty
-                  ? Image.network(
-                pokemon.imageUrl,
-                height: 150,
-                errorBuilder: (_, __, ___) => const Icon(Icons.pets, size: 100, color: Colors.grey),
-              )
-                  : const Icon(Icons.pets, size: 100, color: Colors.grey),
-              const SizedBox(height: 16),
-              Text(
-                pokemon.name,
-                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            ),
+            const SizedBox(height: 24),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildStatColumn('Рост', '${pokemon.height} дм'),
-                  _buildStatColumn('Вес', '${pokemon.weight} г'),
+                  Text(loc.translate('saved'), style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 8),
+                  _items.isEmpty
+                      ? Center(child: Text(loc.translate('empty'), style: TextStyle(color: Colors.grey[600])))
+                      : Expanded(
+                    child: ListView.builder(
+                      itemCount: _items.length,
+                      itemBuilder: (context, index) {
+                        return Card(
+                          child: ListTile(
+                            title: Text(_items[index]),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete, color: Colors.red),
+                              onPressed: () => _deleteItem(index),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
                 ],
               ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                alignment: WrapAlignment.center,
-                children: pokemon.types
-                    .map((type) => Chip(label: Text(type), backgroundColor: Colors.yellow.shade100))
-                    .toList(),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
-      );
-    }
-    return const SizedBox.shrink();
-  }
-
-  Widget _buildStatColumn(String label, String value) {
-    return Column(
-      children: [
-        Text(label, style: const TextStyle(fontSize: 14, color: Colors.grey)),
-        const SizedBox(height: 4),
-        Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-      ],
+      ),
     );
   }
 }
